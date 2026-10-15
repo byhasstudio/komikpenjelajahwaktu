@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Penjelajah Waktu - Buku Komik</title>
+<style>
+  :root { --bg:#2b2118; --paper:#fff; --ink:#111; --accent:#f2b134; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { background:radial-gradient(ellipse at center,#4a3626 0%,var(--bg) 70%); font-family:system-ui,Arial,sans-serif; color:#fff; display:flex; flex-direction:column; overflow:hidden; }
+  header { text-align:center; padding:10px 8px 0; font-weight:800; letter-spacing:2px; font-size:15px; }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center; min-height:0; padding:10px; position:relative; }
+  #book { display:flex; box-shadow:0 20px 50px rgba(0,0,0,.6); background:var(--paper); position:relative; transition:opacity .25s, transform .25s; }
+  #book.out-next { opacity:0; transform:translateX(-30px); }
+  #book.out-prev { opacity:0; transform:translateX(30px); }
+  .pg { background:var(--paper); display:block; }
+  #book.spread .pg:first-child { box-shadow:inset -14px 0 18px -12px rgba(0,0,0,.35); }
+  #book.spread .pg:last-child { box-shadow:inset 14px 0 18px -12px rgba(0,0,0,.35); }
+  #book.spread::after { content:""; position:absolute; left:50%; top:0; bottom:0; width:2px; background:rgba(0,0,0,.25); }
+  #book.single::after { display:none; }
+  nav { display:flex; gap:10px; align-items:center; justify-content:center; padding:10px; flex-wrap:wrap; }
+  button { background:var(--accent); color:#222; border:0; border-radius:999px; padding:10px 18px; font-weight:800; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.35; cursor:default; }
+  button:active:not(:disabled) { transform:scale(.96); }
+  #info { min-width:120px; text-align:center; font-weight:700; }
+  #msg { position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:12px; padding:20px; background:rgba(0,0,0,.6); z-index:5; }
+  #msg.show { display:flex; }
+  #msg p { max-width:440px; line-height:1.5; margin:0; }
+  #msg input { color:#fff; }
+  .edge { position:absolute; top:0; bottom:0; width:18%; background:none; border-radius:0; opacity:0; }
+  #edgeL { left:0; } #edgeR { right:0; }
+</style>
+</head>
+<body>
+<header>PENJELAJAH WAKTU</header>
+<div id="stage">
+  <div id="book" class="spread"><canvas class="pg" id="c1"></canvas><canvas class="pg" id="c2"></canvas></div>
+  <button class="edge" id="edgeL" aria-label="Mundur"></button>
+  <button class="edge" id="edgeR" aria-label="Maju"></button>
+  <div id="msg">
+    <p id="msgtxt">Memuat komik...</p>
+    <input type="file" id="file" accept="application/pdf" style="display:none">
+  </div>
+</div>
+<nav>
+  <button id="first">&laquo;</button>
+  <button id="prev">&lsaquo; Mundur</button>
+  <span id="info">-</span>
+  <button id="next">Maju &rsaquo;</button>
+  <button id="last">&raquo;</button>
+</nav>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+// ====== GANTI NAMA FILE PDF DI SINI (taruh PDF di folder yang sama dengan html ini) ======
+const PDF_URL = "komik_penjelajah_waktu_50_halaman.pdf";
+// ======================================================================================
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const $ = id => document.getElementById(id);
+const book = $("book"), c1 = $("c1"), c2 = $("c2"), msg = $("msg"), msgtxt = $("msgtxt"), fileIn = $("file");
+let pdf = null, total = 0, spreads = [], cur = 0, mode = "spread", busy = false;
+
+function isSingle() { return innerWidth < 760; }
+
+function buildSpreads() {
+  spreads = [];
+  if (isSingle()) { for (let i = 1; i <= total; i++) spreads.push([i]); }
+  else {
+    spreads.push([1]);
+    for (let i = 2; i <= total; i += 2) spreads.push(i + 1 <= total ? [i, i + 1] : [i]);
+  }
+}
+
+async function drawPage(canvas, n, h) {
+  const page = await pdf.getPage(n);
+  const base = page.getViewport({ scale: 1 });
+  const scale = h / base.height, dpr = Math.min(devicePixelRatio || 1, 2);
+  const vp = page.getViewport({ scale: scale * dpr });
+  canvas.width = vp.width; canvas.height = vp.height;
+  canvas.style.width = (vp.width / dpr) + "px"; canvas.style.height = (vp.height / dpr) + "px";
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+}
+
+async function show(dir) {
+  if (!pdf) return;
+  busy = true;
+  const single = isSingle();
+  book.className = (single ? "single" : "spread");
+  const stage = $("stage");
+  const sp = spreads[cur];
+  const cols = single ? 1 : 2;
+  const availW = stage.clientWidth - 20, availH = stage.clientHeight - 20;
+  const first = await pdf.getPage(1), b = first.getViewport({ scale: 1 });
+  const ratio = b.width / b.height;
+  const h = Math.min(availH, availW / (ratio * cols));
+  if (dir) { book.classList.add(dir > 0 ? "out-next" : "out-prev"); await new Promise(r => setTimeout(r, 220)); }
+  // sampul / halaman terakhir tampil tunggal: sisi kosong disembunyikan
+  c2.style.display = (sp.length > 1) ? "block" : "none";
+  c1.style.display = "block";
+  if (!single && sp.length === 1) {
+    // satu halaman di spread: geser agar tetap ke tengah
+    book.classList.remove("spread"); book.classList.add("single");
+  }
+  await drawPage(c1, sp[0], h);
+  if (sp.length > 1) await drawPage(c2, sp[1], h);
+  book.classList.remove("out-next", "out-prev");
+  $("info").textContent = sp.length > 1 ? `Hal. ${sp[0]}-${sp[1]} / ${total}` : `Hal. ${sp[0]} / ${total}`;
+  $("prev").disabled = $("first").disabled = cur === 0;
+  $("next").disabled = $("last").disabled = cur === spreads.length - 1;
+  busy = false;
+}
+
+function go(d) {
+  const n = cur + d;
+  if (busy || n < 0 || n >= spreads.length) return;
+  cur = n; show(d);
+}
+function jump(i) { if (busy) return; const dir = i > cur ? 1 : -1; cur = i; show(dir); }
+
+$("next").onclick = $("edgeR").onclick = () => go(1);
+$("prev").onclick = $("edgeL").onclick = () => go(-1);
+$("first").onclick = () => jump(0);
+$("last").onclick = () => jump(spreads.length - 1);
+addEventListener("keydown", e => {
+  if (e.key === "ArrowRight" || e.key === "PageDown") go(1);
+  if (e.key === "ArrowLeft" || e.key === "PageUp") go(-1);
+});
+let tx = null;
+$("stage").addEventListener("touchstart", e => tx = e.touches[0].clientX, { passive: true });
+$("stage").addEventListener("touchend", e => {
+  if (tx === null) return;
+  const dx = e.changedTouches[0].clientX - tx; tx = null;
+  if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
+});
+let rt;
+addEventListener("resize", () => {
+  clearTimeout(rt);
+  rt = setTimeout(() => {
+    if (!pdf) return;
+    const pageNow = spreads[cur][0];
+    buildSpreads();
+    cur = Math.max(0, spreads.findIndex(s => s.includes(pageNow)));
+    show();
+  }, 250);
+});
+
+async function load(src) {
+  msg.classList.add("show"); msgtxt.textContent = "Memuat komik..."; fileIn.style.display = "none";
+  try {
+    pdf = await pdfjsLib.getDocument(src).promise;
+    total = pdf.numPages; buildSpreads(); cur = 0;
+    msg.classList.remove("show");
+    await show();
+  } catch (err) {
+    pdf = null;
+    msgtxt.innerHTML = "PDF tidak bisa dimuat otomatis.<br>Pastikan file <b>" + PDF_URL + "</b> ada di folder yang sama dan html dibuka lewat server/hosting (bukan file://), atau pilih file PDF secara manual:";
+    fileIn.style.display = "block";
+  }
+}
+fileIn.onchange = async () => {
+  const f = fileIn.files[0]; if (!f) return;
+  load({ data: new Uint8Array(await f.arrayBuffer()) });
+};
+load(PDF_URL);
+</script>
+</body>
+</html>
